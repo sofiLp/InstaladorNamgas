@@ -1,0 +1,34 @@
+             Empresa xxxxx 
+
+   **********************************
+
+Dirc: xxxx
+Tel:xxxx 
+Rnc: xxxx
+
+              Ticket Venta
+
+Folio : 
+Fecha:27/02/2021 Hora:05:36 p. m.
+Le Atendio: xxxx
+
+----------------------------------------
+Producto       Cant   P.Unit    Importe
+----------------------------------------
+----------------------------------------
+ 
+Total                                80$
+
+ 
+Pago Con:                            80$
+
+Cambio:                               0$
+
+ 
+   **********************************
+
+   *     Gracias por preferirnos    *
+
+   **********************************
+
+ 
