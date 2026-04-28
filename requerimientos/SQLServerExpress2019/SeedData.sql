@@ -2,7 +2,7 @@
 -- Idempotente: IF NOT EXISTS en cada INSERT
 -- Generado: 2026-04-08
 
-USE [PVData]
+USE [PVDATANMG]
 GO
 
 -- zona

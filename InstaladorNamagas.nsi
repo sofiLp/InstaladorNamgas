@@ -106,7 +106,10 @@ Function InstallSQLServer
   ${If} $0 == 0
     DetailPrint "La instancia NAMAGAS ya est� instalada."
     StrCpy $SQLInstallSuccess "true"
-    DetailPrint "Configurando login y base de datos Namagas..."
+    DetailPrint "Configurando login y base de datos PVDATANMG..."
+    SetOutPath "${TEMP_DIR}"
+    File "requerimientos\\PVDATANMG.mdf"
+    File "requerimientos\\PVDATANMG_log.ldf"
     SetOutPath "${TEMP_DIR}\\SQLServerExpress2019"
     CreateDirectory "${TEMP_DIR}\\SQLServerExpress2019"
     File "requerimientos\\SQLServerExpress2019\\ConfigurarLogin.ps1"
