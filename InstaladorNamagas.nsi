@@ -24,8 +24,8 @@
 !define DOTNET_INSTALLER_NAME "dotNetF4.7.exe"
 !define DOTNET_FRAMEWORK_RELEASE "460798"
 
-!define WEBAPI_SERVICE_NAME "ApiNAMAGAS"
-!define WEBAPI_DISPLAY_NAME "ApiNAMAGAS Servicio Web Punto de Venta"
+!define WEBAPI_SERVICE_NAME "serviceNamagas"
+!define WEBAPI_DISPLAY_NAME "serviceNamagas Servicio Web Punto de Venta"
 !define WEBAPI_EXE_NAME     "WebApi.exe"
 !define SQL_INSTANCE "NAMAGAS"
 !define TEMP_DIR "$INSTDIR\\Temp"
@@ -68,6 +68,14 @@ SetCompressor /SOLID lzma
 Function .onInit
   InitPluginsDir
   SetOutPath "$PLUGINSDIR"
+
+  ; Detectar instalación previa en ruta diferente y advertir al usuario
+  ReadRegStr $0 HKLM "Software\\${APP_NAME}" "Install_Dir"
+  ${If} $0 != ""
+  ${AndIf} $0 != $INSTDIR
+    MessageBox MB_ICONINFORMATION|MB_OK \
+      "Se detectó una instalación previa en:$\n$0$\n$\nLa nueva versión se instalará en:$\n$INSTDIR$\n$\nLos archivos anteriores NO se eliminarán automáticamente.$\nPuede borrarlos manualmente después de verificar que todo funciona."
+  ${EndIf}
 FunctionEnd
 
 ; ---------- Verificar e instalar .NET ----------
@@ -107,15 +115,16 @@ Function InstallSQLServer
     DetailPrint "La instancia NAMAGAS ya est� instalada."
     StrCpy $SQLInstallSuccess "true"
     DetailPrint "Configurando login y base de datos PVDATANMG..."
-    SetOutPath "${TEMP_DIR}"
-    File "requerimientos\\PVDATANMG.mdf"
-    File "requerimientos\\PVDATANMG_log.ldf"
     SetOutPath "${TEMP_DIR}\\SQLServerExpress2019"
     CreateDirectory "${TEMP_DIR}\\SQLServerExpress2019"
     File "requerimientos\\SQLServerExpress2019\\ConfigurarLogin.ps1"
     File "requerimientos\\SQLServerExpress2019\\CreateBaseSchema.sql"
     File "requerimientos\\SQLServerExpress2019\\SeedData.sql"
     nsExec::ExecToLog 'powershell -ExecutionPolicy Bypass -File "${TEMP_DIR}\\SQLServerExpress2019\\ConfigurarLogin.ps1"'
+    Pop $0
+    ${If} $0 != 0
+      MessageBox MB_ICONSTOP "Error al configurar login SQL (cód. $0).$\nRevise los logs del instalador."
+    ${EndIf}
     Return
   ${Else}
     DetailPrint "La instancia NAMAGAS no est� instalada. Se proceder� a instalar SQL Server Express..."
@@ -150,9 +159,8 @@ FunctionEnd
 Function InstallWindowsService
   DetailPrint "Instalando servicio WebAPI..."
   CreateDirectory "$INSTDIR\\WEBAPI"
-  SetOutPath "$INSTDIR\\WEBAPI"
-  File /r "WEBAPI\\*.*"
 
+  ; Detener y eliminar servicio existente antes de copiar archivos
   nsExec::ExecToLog 'sc query "${WEBAPI_SERVICE_NAME}"'
   Pop $0
   ${If} $0 == 0
@@ -160,6 +168,26 @@ Function InstallWindowsService
     Sleep 2000
     nsExec::ExecToLog 'sc delete "${WEBAPI_SERVICE_NAME}"'
   ${EndIf}
+
+  ; Preservar appsettings.json si ya existe (reinstalación en equipo configurado)
+  IfFileExists "$INSTDIR\\WEBAPI\\appsettings.json" appsettings_existe appsettings_nuevo
+  appsettings_existe:
+    DetailPrint "appsettings.json existente preservado (configuración de BD del equipo)"
+    Goto copiar_webapi
+  appsettings_nuevo:
+    DetailPrint "Instalación nueva — copiando appsettings.json por defecto"
+  copiar_webapi:
+
+  SetOutPath "$INSTDIR\\WEBAPI"
+  ; Copiar todos los archivos excepto appsettings.json (ya manejado arriba), debug symbols y dev config
+  File /r /x "appsettings.json" /x "appsettings.Development.json" /x "*.pdb" "WEBAPI\\*.*"
+
+  ; Solo copiar appsettings.json si no existía
+  IfFileExists "$INSTDIR\\WEBAPI\\appsettings.json" 0 copiar_appsettings
+    Goto appsettings_listo
+  copiar_appsettings:
+    File "WEBAPI\\appsettings.json"
+  appsettings_listo:
 
   nsExec::ExecToLog 'sc create "${WEBAPI_SERVICE_NAME}" binPath= "\"$INSTDIR\\WEBAPI\\${WEBAPI_EXE_NAME}\"" DisplayName= "${WEBAPI_DISPLAY_NAME}" start= auto'
   Pop $0
@@ -221,6 +249,9 @@ Section "Instalaci�n principal"
   WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${APP_NAME}" "DisplayVersion" "${APP_VERSION}"
   WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${APP_NAME}" "Publisher" "${APP_PUBLISHER}"
   WriteRegStr HKLM "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${APP_NAME}" "InstallLocation" "$INSTDIR"
+
+  ; Guardar ruta de instalación para que futuras reinstalaciones la detecten
+  WriteRegStr HKLM "Software\\${APP_NAME}" "Install_Dir" "$INSTDIR"
 SectionEnd
 
 Section "Firewall Rules"

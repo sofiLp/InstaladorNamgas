@@ -1,2 +1,3 @@
-# Output compilado — regenerar con: makensis InstaladorNamagas.nsi
+# Binarios compilados — regenerar antes de hacer el instalador
 Instalador_PuntoDeVenta.exe
+WEBAPI/WebApi.exe
