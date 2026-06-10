@@ -27,8 +27,12 @@
 !define WEBAPI_SERVICE_NAME "serviceNamagas"
 !define WEBAPI_DISPLAY_NAME "serviceNamagas Servicio Web Punto de Venta"
 !define WEBAPI_EXE_NAME     "WebApi.exe"
-!define SQL_INSTANCE "NAMAGAS"
-!define TEMP_DIR "$INSTDIR\\Temp"
+!define SQL_INSTANCE        "NAMAGAS"
+!define TEMP_DIR            "$INSTDIR\\Temp"
+
+; --- Conexiones para MigrationTool (PVDATA siempre existe con Windows auth) ---
+!define MIGRATION_ORIGEN_CS  "Data Source=(localdb)\\v11.0;Database=PVData;Integrated Security=True;Connect Timeout=30;Encrypt=False;TrustServerCertificate=False;ApplicationIntent=ReadWrite;MultiSubnetFailover=False"
+!define MIGRATION_DESTINO_CS "Data Source=.\\NAMAGAS;Database=PVDataNMG;User Id=namagas;Password=n4m4kg24;Connect Timeout=30;Encrypt=False;TrustServerCertificate=True;"
 
 
 Var SQLInstallSuccess
@@ -157,35 +161,35 @@ FunctionEnd
 
 ; ---------- Migrar PVDATA → PVDATANMG ----------
 Function RunMigrationTool
-  DetailPrint "Verificando migración PVDATA → PVDATANMG..."
+  DetailPrint "Ejecutando migración PVDATA → PVDATANMG..."
 
-  ; Solo migrar si existe configuración previa (reinstalación/actualización)
-  IfFileExists "$INSTDIR\WEBAPI\estacion.config.json" migration_ok skip_migration
+  CreateDirectory "${TEMP_DIR}\MigrationTool"
+  SetOutPath "${TEMP_DIR}\MigrationTool"
+  File "MigrationTool\MigrationTool.exe"
+  File "MigrationTool\Microsoft.Data.SqlClient.SNI.dll"
 
-  migration_ok:
-    DetailPrint "Instalación previa detectada — ejecutando migración..."
-    ; Copiar herramienta junto a estacion.config.json para que la lea
-    SetOutPath "$INSTDIR\WEBAPI"
-    File "MigrationTool\MigrationTool.exe"
-    File "MigrationTool\Microsoft.Data.SqlClient.SNI.dll"
+  ; Escribir estacion.config.json con las conexiones conocidas
+  FileOpen $9 "${TEMP_DIR}\MigrationTool\estacion.config.json" w
+  FileWrite $9 '{$\n'
+  FileWrite $9 '  "ConnectionStrings": {$\n'
+  FileWrite $9 '    "pvOrigen":      "${MIGRATION_ORIGEN_CS}",$\n'
+  FileWrite $9 '    "pvconnectionc": "${MIGRATION_DESTINO_CS}"$\n'
+  FileWrite $9 '  }$\n'
+  FileWrite $9 '}$\n'
+  FileClose $9
 
-    nsExec::ExecToLog '"$INSTDIR\WEBAPI\MigrationTool.exe"'
-    Pop $0
-    ${If} $0 == 0
-      DetailPrint "Migración completada exitosamente."
-    ${Else}
-      DetailPrint "MigrationTool finalizó con código $0 — revisar $INSTDIR\WEBAPI\migration.log"
-    ${EndIf}
+  nsExec::ExecToLog '"${TEMP_DIR}\MigrationTool\MigrationTool.exe"'
+  Pop $0
+  ${If} $0 == 0
+    DetailPrint "Migración completada exitosamente."
+  ${Else}
+    DetailPrint "MigrationTool finalizó con código $0 (no crítico — sin datos o PVDATA inaccesible)."
+  ${EndIf}
 
-    ; Limpiar binarios de la herramienta (el log queda para diagnóstico)
-    Delete "$INSTDIR\WEBAPI\MigrationTool.exe"
-    Delete "$INSTDIR\WEBAPI\Microsoft.Data.SqlClient.SNI.dll"
-    Goto migration_end
-
-  skip_migration:
-    DetailPrint "Instalación nueva — sin datos previos que migrar."
-
-  migration_end:
+  ; Copiar log para diagnóstico y limpiar herramienta
+  CreateDirectory "$INSTDIR\WEBAPI"
+  CopyFiles "${TEMP_DIR}\MigrationTool\migration.log" "$INSTDIR\WEBAPI\migration.log"
+  RMDir /r "${TEMP_DIR}\MigrationTool"
 FunctionEnd
 
 ; ---------- Instalar servicio WebAPI ----------
