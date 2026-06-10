@@ -118,17 +118,7 @@ Function InstallSQLServer
   ${If} $0 == 0
     DetailPrint "La instancia NAMAGAS ya est� instalada."
     StrCpy $SQLInstallSuccess "true"
-    DetailPrint "Configurando login y base de datos PVDATANMG..."
-    SetOutPath "${TEMP_DIR}\\SQLServerExpress2019"
-    CreateDirectory "${TEMP_DIR}\\SQLServerExpress2019"
-    File "requerimientos\\SQLServerExpress2019\\ConfigurarLogin.ps1"
-    File "requerimientos\\SQLServerExpress2019\\CreateBaseSchema.sql"
-    File "requerimientos\\SQLServerExpress2019\\SeedData.sql"
-    nsExec::ExecToLog 'powershell -ExecutionPolicy Bypass -File "${TEMP_DIR}\\SQLServerExpress2019\\ConfigurarLogin.ps1"'
-    Pop $0
-    ${If} $0 != 0
-      MessageBox MB_ICONSTOP "Error al configurar login SQL (cód. $0).$\nRevise los logs del instalador."
-    ${EndIf}
+    Call ConfigurarBD
     Return
   ${Else}
     DetailPrint "La instancia NAMAGAS no est� instalada. Se proceder� a instalar SQL Server Express..."
@@ -148,10 +138,42 @@ Function InstallSQLServer
   ${If} $0 == 0
     DetailPrint "SQL Server instalado correctamente."
     StrCpy $SQLInstallSuccess "true"
+    Call ConfigurarBD
   ${Else}
     DetailPrint "Error al instalar SQL Server. C�digo: $0"
     StrCpy $SQLInstallSuccess "false"
     MessageBox MB_ICONSTOP "Error instalando SQL Server:\n\nC�digo: $0"
+  ${EndIf}
+FunctionEnd
+
+; ---------- Crear login + BD + schema (común a instalación nueva y reinstalación) ----------
+Function ConfigurarBD
+  DetailPrint "Configurando login y base de datos PVDATANMG..."
+
+  ; Copiar archivos MDF/LDF a TEMP_DIR
+  SetOutPath "${TEMP_DIR}"
+  File "requerimientos\\PVDATANMG.mdf"
+  File "requerimientos\\PVDATANMG_log.ldf"
+
+  SetOutPath "${TEMP_DIR}\\SQLServerExpress2019"
+  CreateDirectory "${TEMP_DIR}\\SQLServerExpress2019"
+  File "requerimientos\\SQLServerExpress2019\\ConfigurarLogin.ps1"
+  File "requerimientos\\SQLServerExpress2019\\CreateBaseSchema.sql"
+  File "requerimientos\\SQLServerExpress2019\\SeedData.sql"
+
+  ; Marcar que ConfigurarBD fue llamado (diagnóstico)
+  FileOpen $9 "${TEMP_DIR}\\configurar_bd_called.txt" w
+  FileWrite $9 "ConfigurarBD invocado$\r$\n"
+  FileClose $9
+
+  DetailPrint "Ejecutando ConfigurarLogin.ps1..."
+  nsExec::ExecToLog 'powershell -NonInteractive -ExecutionPolicy Bypass -File "${TEMP_DIR}\\SQLServerExpress2019\\ConfigurarLogin.ps1"'
+  Pop $0
+  DetailPrint "ConfigurarLogin.ps1 exit code: $0"
+  ${If} $0 != 0
+    MessageBox MB_ICONSTOP "Error al configurar login SQL.$\nCódigo: $0$\nRevise: ${TEMP_DIR}\configurar_login.log"
+  ${Else}
+    DetailPrint "PVDATANMG configurada correctamente."
   ${EndIf}
 FunctionEnd
 
