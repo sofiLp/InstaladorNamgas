@@ -155,6 +155,39 @@ FunctionEnd
 
 
 
+; ---------- Migrar PVDATA → PVDATANMG ----------
+Function RunMigrationTool
+  DetailPrint "Verificando migración PVDATA → PVDATANMG..."
+
+  ; Solo migrar si existe configuración previa (reinstalación/actualización)
+  IfFileExists "$INSTDIR\WEBAPI\estacion.config.json" migration_ok skip_migration
+
+  migration_ok:
+    DetailPrint "Instalación previa detectada — ejecutando migración..."
+    ; Copiar herramienta junto a estacion.config.json para que la lea
+    SetOutPath "$INSTDIR\WEBAPI"
+    File "MigrationTool\MigrationTool.exe"
+    File "MigrationTool\Microsoft.Data.SqlClient.SNI.dll"
+
+    nsExec::ExecToLog '"$INSTDIR\WEBAPI\MigrationTool.exe"'
+    Pop $0
+    ${If} $0 == 0
+      DetailPrint "Migración completada exitosamente."
+    ${Else}
+      DetailPrint "MigrationTool finalizó con código $0 — revisar $INSTDIR\WEBAPI\migration.log"
+    ${EndIf}
+
+    ; Limpiar binarios de la herramienta (el log queda para diagnóstico)
+    Delete "$INSTDIR\WEBAPI\MigrationTool.exe"
+    Delete "$INSTDIR\WEBAPI\Microsoft.Data.SqlClient.SNI.dll"
+    Goto migration_end
+
+  skip_migration:
+    DetailPrint "Instalación nueva — sin datos previos que migrar."
+
+  migration_end:
+FunctionEnd
+
 ; ---------- Instalar servicio WebAPI ----------
 Function InstallWindowsService
   DetailPrint "Instalando servicio WebAPI..."
@@ -229,6 +262,7 @@ Section "Instalaci�n principal"
   ;Call InstallSqlCmdUtils
 ; Call EjecutarConfiguradorSQL
 
+  Call RunMigrationTool
 
   ; Copiar aplicaci�n
   SetOutPath "$INSTDIR\\App"
