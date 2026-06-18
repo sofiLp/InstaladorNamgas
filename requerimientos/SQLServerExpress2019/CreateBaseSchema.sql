@@ -145,7 +145,12 @@ CREATE TABLE [dbo].[caja](
 	[estado] [bit] NOT NULL,
 	[abierta] [bit] NOT NULL,
 	[equipo] [nvarchar](max) NULL,
- CONSTRAINT [PK_caja] PRIMARY KEY CLUSTERED 
+	[es_servidor] [bit] NOT NULL DEFAULT 0,
+	[descripcion] [nvarchar](300) NULL,
+	[nombre_equipo] [nvarchar](200) NULL,
+	[ip_address] [nvarchar](50) NULL,
+	[fecha_registro] [datetime] NULL,
+ CONSTRAINT [PK_caja] PRIMARY KEY CLUSTERED
 (
 	[id_caja] ASC
 )WITH (PAD_INDEX = OFF, STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, ALLOW_ROW_LOCKS = ON, ALLOW_PAGE_LOCKS = ON) ON [PRIMARY]
