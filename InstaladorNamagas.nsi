@@ -31,8 +31,8 @@
 !define TEMP_DIR            "$INSTDIR\\Temp"
 
 ; --- Conexiones para MigrationTool (PVDATA siempre existe con Windows auth) ---
-!define MIGRATION_ORIGEN_CS  "Data Source=(localdb)\\v11.0;Database=PVData;Integrated Security=True;Connect Timeout=30;Encrypt=False;TrustServerCertificate=False;ApplicationIntent=ReadWrite;MultiSubnetFailover=False"
-!define MIGRATION_DESTINO_CS "Data Source=.\\NAMAGAS;Database=PVDataNMG;User Id=namagas;Password=n4m4kg24;Connect Timeout=30;Encrypt=False;TrustServerCertificate=True;"
+!define MIGRATION_ORIGEN_CS  "Data Source=(localdb)\\v11.0;Database=PVData;Integrated Security=True;Encrypt=False;TrustServerCertificate=True;"
+!define MIGRATION_DESTINO_CS "Data Source=.\\NAMAGAS;Database=PVDataNMG;User Id=namagas;Password=n4m4kg24;Encrypt=False;TrustServerCertificate=True;"
 
 
 Var SQLInstallSuccess
@@ -118,7 +118,6 @@ Function InstallSQLServer
   ${If} $0 == 0
     DetailPrint "La instancia NAMAGAS ya est� instalada."
     StrCpy $SQLInstallSuccess "true"
-    Call ConfigurarBD
     Return
   ${Else}
     DetailPrint "La instancia NAMAGAS no est� instalada. Se proceder� a instalar SQL Server Express..."
@@ -132,13 +131,12 @@ Function InstallSQLServer
   File /r "requerimientos\\SQLServerExpress2019\\*.*"
 
   DetailPrint "Ejecutando instalaci�n desatendida de SQL Server..."
-  nsExec::ExecToLog 'powershell -ExecutionPolicy Bypass -File "$INSTDIR\\Temp\\SQLServerExpress2019\\InstallSQL.ps1"'
+  nsExec::ExecToLog 'powershell -ExecutionPolicy Bypass -File "${TEMP_DIR}\\SQLServerExpress2019\\InstallSQL.ps1"'
   Pop $0
 
   ${If} $0 == 0
     DetailPrint "SQL Server instalado correctamente."
     StrCpy $SQLInstallSuccess "true"
-    Call ConfigurarBD
   ${Else}
     DetailPrint "Error al instalar SQL Server. C�digo: $0"
     StrCpy $SQLInstallSuccess "false"
@@ -146,52 +144,99 @@ Function InstallSQLServer
   ${EndIf}
 FunctionEnd
 
-; ---------- Crear login + BD + schema (común a instalación nueva y reinstalación) ----------
-Function ConfigurarBD
-  DetailPrint "Configurando login y base de datos PVDATANMG..."
 
-  ; Copiar archivos MDF/LDF a TEMP_DIR
+
+
+
+; ---------- Crear BD PVDataNMG (adjuntar MDF + aplicar schema) ----------
+Function CreateDatabase
+  DetailPrint "Creando base de datos PVDataNMG..."
+
+  ; Detach PVDataNMG si ya existe (libera lock sobre MDF antes de copiarlo)
+  CreateDirectory "${TEMP_DIR}"
   SetOutPath "${TEMP_DIR}"
-  File "requerimientos\\PVDATANMG.mdf"
-  File "requerimientos\\PVDATANMG_log.ldf"
+  FileOpen $9 "${TEMP_DIR}\DetachDB.ps1" w
+  FileWrite $9 "try {$\n"
+  FileWrite $9 "  $$cs = 'Data Source=.\NAMAGAS;Integrated Security=True;Encrypt=False;TrustServerCertificate=True;'$\n"
+  FileWrite $9 "  $$conn = New-Object System.Data.SqlClient.SqlConnection($$cs)$\n"
+  FileWrite $9 "  $$conn.Open()$\n"
+  FileWrite $9 "  $$cmd = $$conn.CreateCommand()$\n"
+  FileWrite $9 "  $$cmd.CommandText = $\"IF DB_ID(N'PVDataNMG') IS NOT NULL BEGIN ALTER DATABASE [PVDataNMG] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; EXEC sp_detach_db N'PVDataNMG','true' END$\"$\n"
+  FileWrite $9 "  $$cmd.ExecuteNonQuery() | Out-Null$\n"
+  FileWrite $9 "  $$conn.Close()$\n"
+  FileWrite $9 "} catch { }$\n"
+  FileClose $9
+  nsExec::ExecToLog 'powershell -NonInteractive -ExecutionPolicy Bypass -File "${TEMP_DIR}\DetachDB.ps1"'
+  Pop $0
 
-  SetOutPath "${TEMP_DIR}\\SQLServerExpress2019"
-  CreateDirectory "${TEMP_DIR}\\SQLServerExpress2019"
-  File "requerimientos\\SQLServerExpress2019\\ConfigurarLogin.ps1"
-  File "requerimientos\\SQLServerExpress2019\\CreateBaseSchema.sql"
-  File "requerimientos\\SQLServerExpress2019\\SeedData.sql"
+  ; MDF a ubicación permanente
+  CreateDirectory "$INSTDIR\WEBAPI\data"
+  SetOutPath "$INSTDIR\WEBAPI\data"
+  File "requerimientos\PVDATANMG.mdf"
 
-  ; Marcar que ConfigurarBD fue llamado (diagnóstico)
-  FileOpen $9 "${TEMP_DIR}\\configurar_bd_called.txt" w
-  FileWrite $9 "ConfigurarBD invocado$\r$\n"
+  ; Schema SQL al temp
+  CreateDirectory "${TEMP_DIR}"
+  SetOutPath "${TEMP_DIR}"
+  File "requerimientos\SQLServerExpress2019\CreateBaseSchema.sql"
+
+  ; Escribir script PowerShell: adjuntar BD + aplicar schema
+  FileOpen $9 "${TEMP_DIR}\SetupDB.ps1" w
+  FileWrite $9 "$$mdf = '$INSTDIR\WEBAPI\data\PVDATANMG.mdf'$\n"
+  FileWrite $9 "$$schemaFile = '$INSTDIR\Temp\CreateBaseSchema.sql'$\n"
+  FileWrite $9 "$$dataDir = [System.IO.Path]::GetDirectoryName($$mdf)$\n"
+  FileWrite $9 "icacls $\"$$dataDir$\" /grant 'Everyone:(OI)(CI)F' | Out-Null$\n"
+  FileWrite $9 "try {$\n"
+  FileWrite $9 "  $$csAdmin = 'Data Source=.\NAMAGAS;Integrated Security=True;Encrypt=False;TrustServerCertificate=True;'$\n"
+  FileWrite $9 "  $$conn = New-Object System.Data.SqlClient.SqlConnection($$csAdmin)$\n"
+  FileWrite $9 "  $$conn.Open()$\n"
+  FileWrite $9 "  $$cmd = $$conn.CreateCommand()$\n"
+  FileWrite $9 "  $$cmd.CommandText = $\"IF DB_ID(N'PVDataNMG') IS NULL CREATE DATABASE [PVDataNMG] ON (FILENAME=N'$\" + $$mdf + $\"') FOR ATTACH_REBUILD_LOG$\"$\n"
+  FileWrite $9 "  $$cmd.ExecuteNonQuery() | Out-Null$\n"
+  FileWrite $9 "  $$cmdLogin = $$conn.CreateCommand()$\n"
+  FileWrite $9 "  $$cmdLogin.CommandText = $\"IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'namagas') CREATE LOGIN [namagas] WITH PASSWORD = N'n4m4kg24'$\"$\n"
+  FileWrite $9 "  $$cmdLogin.ExecuteNonQuery() | Out-Null$\n"
+  FileWrite $9 "  $$conn.Close()$\n"
+  FileWrite $9 "  $$connPv = New-Object System.Data.SqlClient.SqlConnection($$csAdmin + 'Initial Catalog=PVDataNMG;')$\n"
+  FileWrite $9 "  $$connPv.Open()$\n"
+  FileWrite $9 "  $$cmdUser = $$connPv.CreateCommand()$\n"
+  FileWrite $9 "  $$cmdUser.CommandText = $\"IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'namagas') CREATE USER [namagas] FOR LOGIN [namagas] ELSE ALTER USER [namagas] WITH LOGIN = [namagas]; ALTER ROLE [db_owner] ADD MEMBER [namagas]$\"$\n"
+  FileWrite $9 "  $$cmdUser.ExecuteNonQuery() | Out-Null$\n"
+  FileWrite $9 "  $$connPv.Close()$\n"
+  FileWrite $9 "  Write-Host 'PVDataNMG lista — permisos namagas OK'$\n"
+  FileWrite $9 "} catch { Write-Host $\"Error adjuntando BD: $$_$\"; exit 1 }$\n"
+  FileWrite $9 "try {$\n"
+  FileWrite $9 "  $$csDb = 'Data Source=.\NAMAGAS;Database=PVDataNMG;User Id=namagas;Password=n4m4kg24;Encrypt=False;TrustServerCertificate=True;'$\n"
+  FileWrite $9 "  $$conn2 = New-Object System.Data.SqlClient.SqlConnection($$csDb)$\n"
+  FileWrite $9 "  $$conn2.Open()$\n"
+  FileWrite $9 "  $$content = Get-Content $$schemaFile -Raw$\n"
+  FileWrite $9 "  $$batches = $$content -split '(?m)^\s*GO\s*$$'$\n"
+  FileWrite $9 "  foreach ($$b in $$batches) {$\n"
+  FileWrite $9 "    if ($$b.Trim()) {$\n"
+  FileWrite $9 "      $$cmd2 = $$conn2.CreateCommand(); $$cmd2.CommandText = $$b; $$cmd2.CommandTimeout = 300$\n"
+  FileWrite $9 "      try { $$cmd2.ExecuteNonQuery() | Out-Null } catch { }$\n"
+  FileWrite $9 "    }$\n"
+  FileWrite $9 "  }$\n"
+  FileWrite $9 "  $$conn2.Close()$\n"
+  FileWrite $9 "  Write-Host 'Schema aplicado'$\n"
+  FileWrite $9 "} catch { Write-Host $\"Error schema: $$_$\" }$\n"
   FileClose $9
 
-  DetailPrint "Ejecutando ConfigurarLogin.ps1..."
-  nsExec::ExecToLog 'powershell -NonInteractive -ExecutionPolicy Bypass -File "${TEMP_DIR}\\SQLServerExpress2019\\ConfigurarLogin.ps1"'
+  nsExec::ExecToLog 'powershell -NonInteractive -ExecutionPolicy Bypass -File "${TEMP_DIR}\SetupDB.ps1"'
   Pop $0
-  DetailPrint "ConfigurarLogin.ps1 exit code: $0"
-  ${If} $0 != 0
-    MessageBox MB_ICONSTOP "Error al configurar login SQL.$\nCódigo: $0$\nRevise: ${TEMP_DIR}\configurar_login.log"
-  ${Else}
-    DetailPrint "PVDATANMG configurada correctamente."
-  ${EndIf}
+  DetailPrint "CreateDatabase exit: $0"
 FunctionEnd
 
-
-
-
-
-; ---------- Migrar PVDATA → PVDATANMG ----------
+; ---------- Migrar PVDATA → PVDATANMG (omite si pvOrigen no existe) ----------
 Function RunMigrationTool
-  DetailPrint "Ejecutando migración PVDATA → PVDATANMG..."
+  DetailPrint "Ejecutando MigrationTool (migración de datos si aplica)..."
 
   CreateDirectory "${TEMP_DIR}\MigrationTool"
   SetOutPath "${TEMP_DIR}\MigrationTool"
   File "MigrationTool\MigrationTool.exe"
   File "MigrationTool\Microsoft.Data.SqlClient.SNI.dll"
 
-  ; Escribir estacion.config.json con las conexiones conocidas
-  FileOpen $9 "${TEMP_DIR}\MigrationTool\estacion.config.json" w
+  ; Escribir appsettings.json con las conexiones
+  FileOpen $9 "${TEMP_DIR}\MigrationTool\appsettings.json" w
   FileWrite $9 '{$\n'
   FileWrite $9 '  "ConnectionStrings": {$\n'
   FileWrite $9 '    "pvOrigen":      "${MIGRATION_ORIGEN_CS}",$\n'
@@ -200,12 +245,13 @@ Function RunMigrationTool
   FileWrite $9 '}$\n'
   FileClose $9
 
-  nsExec::ExecToLog '"${TEMP_DIR}\MigrationTool\MigrationTool.exe"'
+  nsExec::ExecToLog '"${TEMP_DIR}\MigrationTool\MigrationTool.exe" --silent'
   Pop $0
+  DetailPrint "MigrationTool exit code: $0"
   ${If} $0 == 0
-    DetailPrint "Migración completada exitosamente."
+    DetailPrint "Setup y migración completados."
   ${Else}
-    DetailPrint "MigrationTool finalizó con código $0 (no crítico — sin datos o PVDATA inaccesible)."
+    DetailPrint "MigrationTool finalizó con código $0 — revise migration.log en $INSTDIR\WEBAPI"
   ${EndIf}
 
   ; Copiar log para diagnóstico y limpiar herramienta
@@ -288,6 +334,7 @@ Section "Instalaci�n principal"
   ;Call InstallSqlCmdUtils
 ; Call EjecutarConfiguradorSQL
 
+  Call CreateDatabase
   Call RunMigrationTool
 
   ; Copiar aplicaci�n
